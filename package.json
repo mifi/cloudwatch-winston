@@ -15,7 +15,9 @@
   "files": [
     "index.js"
   ],
-  "scripts": {},
+  "scripts": {
+    "test": "echo todo"
+  },
   "dependencies": {
     "@aws-sdk/client-cloudwatch-logs": "^3.379.1",
     "debug": "^4.3.4"
