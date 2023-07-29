@@ -1,6 +1,6 @@
 {
   "name": "cloudwatch-winston",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Robust and simple Winston transport for AWS CloudWatch Logs",
   "main": "index.js",
   "repository": "https://github.com/mifi/cloudwatch-winston",
