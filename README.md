@@ -6,12 +6,14 @@ Robust and simple [Winston](https://github.com/winstonjs/winston) transport for 
 
 - Tries very hard to deliver messages, even in case of errors
 - Does not fail or break when losing internet connection
+- Does not implement the complex and error-prone *sequence token* logic (no longer needed)
 - Follows [AWS strict logging rules](https://docs.aws.amazon.com/AmazonCloudWatchLogs/latest/APIReference/API_PutLogEvents.html)
-- Customisable memory buffer size
-- Does not implement the complex and error-prone *sequence token* logic (not longer needed)
+- Truncates long messages (handling UTF-8 characters correctly)
+- Customisable memory buffer size, prevents memory overrun by dropping logs when queue is full
+- Logs to CloudWatch when messages have been truncated or dropped due to full queue
 - Cleans up resources when Winston closes the Transport
-- AWS SDK v3
 - Auto-creates log group and stream (optional)
+- AWS SDK v3
 
 ## Usage
 
@@ -53,7 +55,7 @@ const logger = winston.createLogger({
 
 logger.add(cloudWatchTransport);
 
-// When you call close on the logger, it will automatically close the Transport
+// When you call close on the logger, it will automatically close the transport and clean up
 // logger.close()
 ```
 
@@ -62,14 +64,14 @@ logger.add(cloudWatchTransport);
 ```js
 {
   aws: {
-    credentials: {
+    credentials: { // required
       accessKeyId: '',
       secretAccessKey: '',
     },
     region: '',
   },
-  logGroupName: '',
-  logStreamName: '',
+  logGroupName: '', // required
+  logStreamName: '', // required
 
   // whether to auto create the log group
   shouldCreateLogGroup = false,
@@ -81,13 +83,22 @@ logger.add(cloudWatchTransport);
   onError: (err) => console.error(err),
 
   // customise how to format log messages
-  formatLog = ({ level, message, meta }) => '',
+  formatLog = ({ level, message, meta }) => `${level}: ${message}`,
 
-  // minimum interval between batch requests sent to AWS (don't set too low)
+  // minimum interval between batch requests sent to AWS (don't set too low!)
   minInterval = 2000,
 
-  // max number of pending batches - once this limit is exceeded, log calls will be ignored. Note that each batch can have up to 10k messages and a total of about 1MB.
-  maxQueuedBatches = 1000,
+  // max number of pending batches - once this limit is exceeded, log calls will be dropped. Note that each batch can have up to 10k messages and a total of about 1MB.
+  maxQueuedBatches = 100,
+
+  // Text to append to truncated message. Set to empty string to disable.
+  truncatedMessageSuffix = ' TRUNCATED',
+
+  // If maxQueuedBatches is exceeded, we will send queueOverrunMessage to CloudWatch Logs *once*, until queue has returned to normal again. Set to empty string to disable this behavior.
+  queueOverrunMessage = 'Log queue overrun',
+
+  // Whether to abandon any remaining queued batches when the transport closes, or retry them until delivered
+  abandonQueueOnClose = true,
 }
 ```
 
@@ -102,7 +113,6 @@ DEBUG=CloudWatchTransport,CloudWatchTransport:* node test.mjs
 ### TODO
 
 - Max retries option?
-- Allow processing whole queue before stopping (but what if stuck in an error loop)
 - Types
 
 ## Alternatives
@@ -116,6 +126,7 @@ DEBUG=CloudWatchTransport,CloudWatchTransport:* node test.mjs
 
 ### [`winston-cloudwatch`](https://github.com/lazywithclass/winston-cloudwatch)
 
+- Most popular
 - Haven't tested
 - Many issues
 - Many dependencies

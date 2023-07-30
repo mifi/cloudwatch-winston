@@ -1,5 +1,5 @@
 const { CloudWatchLogsClient, CreateLogGroupCommand, CreateLogStreamCommand, PutLogEventsCommand } = require('@aws-sdk/client-cloudwatch-logs');
-
+const truncate = require('truncate-utf8-bytes');
 const { Transport } = require('winston');
 const Debug = require('debug');
 
@@ -26,12 +26,17 @@ class FatalError extends Error {
   }
 }
 
-function transport({ client, logGroupName, logStreamName, shouldCreateLogGroup, shouldCreateLogStream, formatLog, onError, onFatalError, minInterval, maxQueuedBatches }) {
+const getStringBytesSize = (msg) => Buffer.byteLength(msg, 'utf8');
+
+function transport({ client, logGroupName, logStreamName, shouldCreateLogGroup, shouldCreateLogStream, formatLog, onError, onFatalError, minInterval, maxQueuedBatches, abandonQueueOnClose, truncatedMessageSuffix, queueOverrunMessage }) {
+  const truncatedMessageSuffixNumBytes = getStringBytesSize(truncatedMessageSuffix);
+
   const batches = [];
   let currentBatchTotalMessageSize = 0;
   let stopped = false;
   let createdLogGroup = false;
   let createdLogStream = false;
+  let queueOverrun = false;
 
   let timeout;
   const callbacks = new Set();
@@ -48,7 +53,7 @@ function transport({ client, logGroupName, logStreamName, shouldCreateLogGroup, 
     } catch (err) {
       if (err.name === 'ResourceAlreadyExistsException') {
         // OK
-      } else if (['InvalidParameterException', 'LimitExceededException'].includes(err.name)) {
+      } else if (['InvalidParameterException', 'LimitExceededException', 'UnrecognizedClientException'].includes(err.name)) {
         throw new FatalError(err);
       }
       throw err;
@@ -66,7 +71,7 @@ function transport({ client, logGroupName, logStreamName, shouldCreateLogGroup, 
     } catch (err) {
       if (err.name === 'ResourceAlreadyExistsException') {
         // OK
-      } else if (['InvalidParameterException', 'ResourceNotFoundException'].includes(err.name)) {
+      } else if (['InvalidParameterException', 'ResourceNotFoundException', 'UnrecognizedClientException'].includes(err.name)) {
         throw new FatalError(err);
       }
       throw err; // retry
@@ -82,6 +87,8 @@ function transport({ client, logGroupName, logStreamName, shouldCreateLogGroup, 
         } catch (err) { /* ignored */ }
       });
       callbacks.clear();
+
+      queueOverrun = false;
     }
   }
 
@@ -131,29 +138,42 @@ function transport({ client, logGroupName, logStreamName, shouldCreateLogGroup, 
           return;
         }
 
-        // non-fatal errors: retry forever, in cause internet got disconnected temporarily etc
+        // non-fatal errors: retry forever, in case internet got disconnected temporarily etc
         onError(err);
         batches.unshift(batch); // put it back for retry
       }
     } finally {
-      if (!stopped) timeout = setTimeout(processQueue, minInterval);
+      if (!stopped || !abandonQueueOnClose) timeout = setTimeout(processQueue, minInterval);
     }
   }
 
   async function log(timestamp, info) {
-    const message = formatLog(info);
+    let message = formatLog(info);
+    let messageBytesSize = getStringBytesSize(message);
 
-    const messageBytesSize = Buffer.byteLength(message, 'utf8');
-
-    if (messageBytesSize > maxMessageNumBytes) {
-      // todo truncate instead?
-      throw new Error(`Skipping too long log message (${messageBytesSize} bytes)`);
-      // if we were to send this message, we will get InvalidParameterException from AWS
+    if (stopped) {
+      throw new Error('Tried to log after transport closed');
     }
 
-    if (batches.length >= maxQueuedBatches) {
-      throw new Error('Queue is full, skipping log message');
-      // this is just to prevent memory overrun
+    // this is just to prevent memory overrun
+    if (batches.length >= maxQueuedBatches - 1) {
+      const err = new Error('Batch queue is full, skipping log message');
+      if (queueOverrun || !queueOverrunMessage) {
+        throw err;
+      }
+      queueOverrun = true;
+      onError(err);
+      message = queueOverrunMessage;
+      messageBytesSize = getStringBytesSize(message);
+    }
+
+    const actualMaxMessageNumBytes = maxMessageNumBytes - truncatedMessageSuffixNumBytes;
+
+    // if we were to send a too long message, we would get InvalidParameterException from AWS
+    if (messageBytesSize > actualMaxMessageNumBytes) {
+      onError(new Error(`Truncating log message (${messageBytesSize} bytes)`));
+      message = `${truncate(message, actualMaxMessageNumBytes)}${truncatedMessageSuffix}`;
+      messageBytesSize = getStringBytesSize(message);
     }
 
     if (batches.length === 0) {
@@ -170,7 +190,7 @@ function transport({ client, logGroupName, logStreamName, shouldCreateLogGroup, 
 
     // need to start a new batch?
     const maxBatchNumItemsExceeded = batch.length >= maxBatchNumItems;
-    const maxBatchNumBytesExceeded = currentBatchTotalMessageSize >= maxBatchNumBytes - maxMessageNumBytes;
+    const maxBatchNumBytesExceeded = currentBatchTotalMessageSize >= maxBatchNumBytes - actualMaxMessageNumBytes;
     if (maxBatchNumItemsExceeded || maxBatchNumBytesExceeded) {
       batches.push([]);
       currentBatchTotalMessageSize = 0;
@@ -206,7 +226,10 @@ class CloudWatchTransport extends Transport {
       shouldCreateLogStream = true,
       formatLog = ({ level, message }) => `${level}: ${message}`,
       minInterval = 2000,
-      maxQueuedBatches = 1000,
+      maxQueuedBatches = 100,
+      abandonQueueOnClose = true,
+      truncatedMessageSuffix = ' TRUNCATED',
+      queueOverrunMessage = 'Log queue overrun',
       onError = console.error,
     } = options;
 
@@ -224,7 +247,7 @@ class CloudWatchTransport extends Transport {
     };
 
     // eslint-disable-next-line no-underscore-dangle
-    this._transport = transport({ client, logGroupName, logStreamName, shouldCreateLogGroup, shouldCreateLogStream, formatLog, onError, onFatalError, minInterval, maxQueuedBatches });
+    this._transport = transport({ client, logGroupName, logStreamName, shouldCreateLogGroup, shouldCreateLogStream, formatLog, onError, onFatalError, minInterval, maxQueuedBatches, abandonQueueOnClose, truncatedMessageSuffix, queueOverrunMessage });
   }
 
   close() {

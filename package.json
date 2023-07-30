@@ -20,7 +20,8 @@
   },
   "dependencies": {
     "@aws-sdk/client-cloudwatch-logs": "^3.379.1",
-    "debug": "^4.3.4"
+    "debug": "^4.3.4",
+    "truncate-utf8-bytes": "^1.0.2"
   },
   "engines": {
     "node": ">=16"
