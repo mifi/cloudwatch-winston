@@ -114,6 +114,7 @@ DEBUG=CloudWatchTransport,CloudWatchTransport:* node test.mjs
 
 - Max retries option?
 - Types
+- Log calls seem to be delayed when `callback` is not called immediately, thereby delaying timestamps
 
 ## Alternatives
 
