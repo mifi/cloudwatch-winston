@@ -86,7 +86,7 @@ logger.add(cloudWatchTransport);
   // customise how to format log messages
   formatLog: ({ level, message }) => `${level}: ${message}`,
 
-  // a function that allows to you provide custom timestamp for log entries sent to CloudWatch. Must return number of milliseconds since epoch. Default
+  // a function that allows to you provide custom timestamp for log entries sent to CloudWatch. Must return number of milliseconds since epoch. Default: use `timestamp` metadata provided by `winston.format.timestamp()`
   getTimestamp: ({ timestamp }) => +new Date(),
 
   // minimum interval between batch requests sent to AWS (don't set too low!)
