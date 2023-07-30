@@ -28,7 +28,18 @@ class FatalError extends Error {
 
 const getStringBytesSize = (msg) => Buffer.byteLength(msg, 'utf8');
 
-function transport({ client, logGroupName, logStreamName, shouldCreateLogGroup, shouldCreateLogStream, formatLog, onError, onFatalError, minInterval, maxQueuedBatches, abandonQueueOnClose, truncatedMessageSuffix, queueOverrunMessage }) {
+function defaultGetTimestamp({ timestamp }) {
+  if (typeof timestamp === 'string') {
+    const parsed = Date.parse(timestamp);
+    if (!Number.isNaN(parsed)) return +parsed;
+  }
+
+  // Log calls seem to be delayed when `callback` is not called immediately, thereby delaying timestamps, so this new Date() fallback is not accurate
+  // but better than nothing
+  return +new Date();
+}
+
+function transport({ client, logGroupName, logStreamName, shouldCreateLogGroup, shouldCreateLogStream, formatLog, onError, onFatalError, minInterval, maxQueuedBatches, abandonQueueOnClose, truncatedMessageSuffix, queueOverrunMessage, getTimestamp }) {
   const truncatedMessageSuffixNumBytes = getStringBytesSize(truncatedMessageSuffix);
 
   const batches = [];
@@ -147,9 +158,10 @@ function transport({ client, logGroupName, logStreamName, shouldCreateLogGroup, 
     }
   }
 
-  async function log(timestamp, info) {
+  async function log(info) {
     let message = formatLog(info);
     let messageBytesSize = getStringBytesSize(message);
+    const timestamp = getTimestamp(info);
 
     if (stopped) {
       throw new Error('Tried to log after transport closed');
@@ -230,6 +242,7 @@ class CloudWatchTransport extends Transport {
       abandonQueueOnClose = true,
       truncatedMessageSuffix = ' TRUNCATED',
       queueOverrunMessage = 'Log queue overrun',
+      getTimestamp = defaultGetTimestamp,
       onError = console.error,
     } = options;
 
@@ -247,7 +260,7 @@ class CloudWatchTransport extends Transport {
     };
 
     // eslint-disable-next-line no-underscore-dangle
-    this._transport = transport({ client, logGroupName, logStreamName, shouldCreateLogGroup, shouldCreateLogStream, formatLog, onError, onFatalError, minInterval, maxQueuedBatches, abandonQueueOnClose, truncatedMessageSuffix, queueOverrunMessage });
+    this._transport = transport({ client, logGroupName, logStreamName, shouldCreateLogGroup, shouldCreateLogStream, formatLog, onError, onFatalError, minInterval, maxQueuedBatches, abandonQueueOnClose, truncatedMessageSuffix, queueOverrunMessage, getTimestamp });
   }
 
   close() {
@@ -257,7 +270,7 @@ class CloudWatchTransport extends Transport {
 
   log(info, cb = () => {}) {
     // eslint-disable-next-line no-underscore-dangle
-    this._transport.log(+new Date(), info).then(() => {
+    this._transport.log(info).then(() => {
       this.emit('logged', info); // not sure about this but it's found in other transports
       cb();
     }).catch((err) => {
