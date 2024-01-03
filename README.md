@@ -20,7 +20,7 @@ Robust and simple [Winston](https://github.com/winstonjs/winston) transport for 
 
 ```js
 import CloudWatchTransport from 'cloudwatch-winston';
-import util from 'node:util';
+import { format } from 'node:util';
 
 const cloudWatchTransport = new CloudWatchTransport({
   logGroupName: 'my-log-group',
@@ -42,7 +42,7 @@ const cloudWatchTransport = new CloudWatchTransport({
 const combineMessageAndSplat = () => ({
   transform(info) {
     const { [Symbol.for('splat')]: args = [], message } = info;
-    info.message = util.format(message, ...args);
+    info.message = format(message, ...args);
     return info;
   },
 });
