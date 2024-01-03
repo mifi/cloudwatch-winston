@@ -20,6 +20,7 @@ Robust and simple [Winston](https://github.com/winstonjs/winston) transport for 
 
 ```js
 import CloudWatchTransport from 'cloudwatch-winston';
+import util from 'node:util';
 
 const cloudWatchTransport = new CloudWatchTransport({
   logGroupName: 'my-log-group',
