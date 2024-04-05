@@ -66,8 +66,9 @@ function transport({ client, logGroupName, logStreamName, shouldCreateLogGroup, 
         // OK
       } else if (['InvalidParameterException', 'LimitExceededException', 'UnrecognizedClientException'].includes(err.name)) {
         throw new FatalError(err);
+      } else {
+        throw err;
       }
-      throw err;
     }
     createdLogGroup = true;
   }
