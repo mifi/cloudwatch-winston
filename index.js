@@ -85,8 +85,9 @@ function transport({ client, logGroupName, logStreamName, shouldCreateLogGroup, 
         // OK
       } else if (['InvalidParameterException', 'ResourceNotFoundException', 'UnrecognizedClientException'].includes(err.name)) {
         throw new FatalError(err);
+      } else {
+        throw err; // retry
       }
-      throw err; // retry
     }
     createdLogStream = true;
   }
