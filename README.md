@@ -132,6 +132,7 @@ DEBUG=CloudWatchTransport,CloudWatchTransport:* node test.mjs
 ### [`winston-cloudwatch`](https://github.com/lazywithclass/winston-cloudwatch)
 
 - Most popular
+- Unmaintained
 - Haven't tested
 - Many issues
 - Many dependencies
