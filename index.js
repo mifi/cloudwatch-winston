@@ -39,7 +39,23 @@ function defaultGetTimestamp({ timestamp }) {
   return +new Date();
 }
 
-function transport({ client, logGroupName, logStreamName, shouldCreateLogGroup, shouldCreateLogStream, formatLog, onError, onFatalError, minInterval, maxQueuedBatches, abandonQueueOnClose, truncatedMessageSuffix, queueOverrunMessage, getTimestamp }) {
+function transport({
+  client,
+  logGroupName,
+  logStreamName,
+  shouldCreateLogGroup,
+  shouldCreateLogStream,
+  formatLog,
+  onError,
+  onFatalError,
+  minInterval,
+  maxQueuedBatches,
+  abandonQueueOnClose,
+  truncatedMessageSuffix,
+  queueOverrunMessage,
+  getTimestamp,
+  shouldCloseOnFatalError,
+}) {
   const truncatedMessageSuffixNumBytes = getStringBytesSize(truncatedMessageSuffix);
 
   const batches = [];
@@ -50,7 +66,6 @@ function transport({ client, logGroupName, logStreamName, shouldCreateLogGroup, 
   let queueOverrun = false;
 
   let timeout;
-  const callbacks = new Set();
 
   async function createLogGroup() {
     try {
@@ -63,7 +78,7 @@ function transport({ client, logGroupName, logStreamName, shouldCreateLogGroup, 
       }));
     } catch (err) {
       if (err.name === 'ResourceAlreadyExistsException') {
-        // OK
+        // idempotent ignore
       } else if (['InvalidParameterException', 'LimitExceededException', 'UnrecognizedClientException'].includes(err.name)) {
         throw new FatalError(err);
       } else {
@@ -82,7 +97,7 @@ function transport({ client, logGroupName, logStreamName, shouldCreateLogGroup, 
       }));
     } catch (err) {
       if (err.name === 'ResourceAlreadyExistsException') {
-        // OK
+        // idempotent ignore
       } else if (['InvalidParameterException', 'ResourceNotFoundException', 'UnrecognizedClientException'].includes(err.name)) {
         throw new FatalError(err);
       } else {
@@ -92,25 +107,14 @@ function transport({ client, logGroupName, logStreamName, shouldCreateLogGroup, 
     createdLogStream = true;
   }
 
-  function callCallbacksIfEmptyQueue() {
-    if (batches.length === 0) { // queue is empty, call the callbacks!
-      callbacks.forEach((callback) => {
-        try {
-          callback();
-        } catch (err) { /* ignored */ }
-      });
-      callbacks.clear();
-
-      queueOverrun = false;
-    }
-  }
-
   async function processQueue() {
     try {
-      callCallbacksIfEmptyQueue();
+      if (batches.length === 0) { // reset when queue is empty
+        queueOverrun = false;
+      }
 
       const batch = batches.shift();
-      if (batch == null) return;
+      if (batch == null) return; // nothing to send, retry later
 
       try {
         if (!createdLogGroup && shouldCreateLogGroup) await createLogGroup();
@@ -128,8 +132,6 @@ function transport({ client, logGroupName, logStreamName, shouldCreateLogGroup, 
             logEvents: batch,
           }));
 
-          debug('sent batch');
-
           if (response.rejectedLogEventsInfo != null) onError(new Error('Rejected log events'));
           // todo
           /* {
@@ -137,10 +139,12 @@ function transport({ client, logGroupName, logStreamName, shouldCreateLogGroup, 
             tooOldLogEventEndIndex: Number("int"),
             expiredLogEventEndIndex: Number("int"),
           } */
+
+          debug('sent batch');
         } catch (err) {
           if (err.name === 'DataAlreadyAcceptedException') {
-            // OK
-          } else if (['InvalidParameterException', 'InvalidSequenceTokenException', 'ResourceNotFoundException', 'UnrecognizedClientException'].includes(err.name)) {
+            // idempotent ignore
+          } else if (typeof shouldCloseOnFatalError === 'function' && shouldCloseOnFatalError(err)) {
             throw new FatalError(err);
           }
           throw err; // retry
@@ -153,14 +157,14 @@ function transport({ client, logGroupName, logStreamName, shouldCreateLogGroup, 
 
         // non-fatal errors: retry forever, in case internet got disconnected temporarily etc
         onError(err);
-        batches.unshift(batch); // put it back for retry
+        batches.unshift(batch); // put the batch back for retry
       }
     } finally {
       if (!stopped || !abandonQueueOnClose) timeout = setTimeout(processQueue, minInterval);
     }
   }
 
-  async function log(info) {
+  function log(info) {
     let message = formatLog(info);
     let messageBytesSize = getStringBytesSize(message);
     const timestamp = getTimestamp(info);
@@ -191,7 +195,7 @@ function transport({ client, logGroupName, logStreamName, shouldCreateLogGroup, 
     }
 
     if (batches.length === 0) {
-      batches.push([]);
+      batches.push([]); // start a new batch
       currentBatchTotalMessageSize = 0;
     }
     const batch = batches[batches.length - 1];
@@ -206,16 +210,10 @@ function transport({ client, logGroupName, logStreamName, shouldCreateLogGroup, 
     const maxBatchNumItemsExceeded = batch.length >= maxBatchNumItems;
     const maxBatchNumBytesExceeded = currentBatchTotalMessageSize >= maxBatchNumBytes - actualMaxMessageNumBytes;
     if (maxBatchNumItemsExceeded || maxBatchNumBytesExceeded) {
-      batches.push([]);
+      batches.push([]); // start a new batch
       currentBatchTotalMessageSize = 0;
       debug('new batch', { maxBatchNumItemsExceeded, maxBatchNumBytesExceeded });
     }
-
-    const promise = new Promise((resolve) => callbacks.add(resolve));
-
-    callCallbacksIfEmptyQueue();
-
-    return promise;
   }
 
   function close() {
@@ -246,6 +244,7 @@ class CloudWatchTransport extends Transport {
       queueOverrunMessage = 'Log queue overrun',
       getTimestamp = defaultGetTimestamp,
       onError = console.error,
+      shouldCloseOnFatalError = (err) => ['InvalidParameterException', 'InvalidSequenceTokenException', 'ResourceNotFoundException', 'UnrecognizedClientException'].includes(err.name),
     } = options;
 
     // eslint-disable-next-line no-underscore-dangle
@@ -262,7 +261,7 @@ class CloudWatchTransport extends Transport {
     };
 
     // eslint-disable-next-line no-underscore-dangle
-    this._transport = transport({ client, logGroupName, logStreamName, shouldCreateLogGroup, shouldCreateLogStream, formatLog, onError, onFatalError, minInterval, maxQueuedBatches, abandonQueueOnClose, truncatedMessageSuffix, queueOverrunMessage, getTimestamp });
+    this._transport = transport({ client, logGroupName, logStreamName, shouldCreateLogGroup, shouldCreateLogStream, formatLog, onError, onFatalError, minInterval, maxQueuedBatches, abandonQueueOnClose, truncatedMessageSuffix, queueOverrunMessage, getTimestamp, shouldCloseOnFatalError });
   }
 
   close() {
@@ -272,14 +271,15 @@ class CloudWatchTransport extends Transport {
 
   log(info, cb = () => {}) {
     // eslint-disable-next-line no-underscore-dangle
-    this._transport.log(info).then(() => {
+    try {
+      this._transport.log(info)
       this.emit('logged', info); // not sure about this but it's found in other transports
       cb();
-    }).catch((err) => {
+    } catch (err) {
       // eslint-disable-next-line no-underscore-dangle
       this._onError(err);
       cb(); // doesn't seem like this supports an error
-    });
+    }
   }
 }
 

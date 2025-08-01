@@ -102,8 +102,11 @@ logger.add(cloudWatchTransport);
   // If maxQueuedBatches is exceeded, we will send queueOverrunMessage to CloudWatch Logs *once*, until queue has returned to normal again. Set to empty string to disable this behavior.
   queueOverrunMessage: 'Log queue overrun',
 
-  // Whether to abandon any remaining queued batches when the transport closes, or retry them until delivered
+  // Whether to immediately abandon any remaining queued batches when the transport closes, or retry them until delivered
   abandonQueueOnClose: true,
+
+  // Whether a supplied error should cause the Winston transport to be closed. Any errors thrown when creating the log group or stream are not affected by this option.
+  shouldCloseOnFatalError: (err) => ['InvalidParameterException', 'InvalidSequenceTokenException', 'ResourceNotFoundException', 'UnrecognizedClientException'].includes(err.name),
 }
 ```
 
@@ -140,6 +143,6 @@ DEBUG=CloudWatchTransport,CloudWatchTransport:* node test.mjs
 
 ## Release
 
-```
+```bash
 np
 ```

@@ -2,19 +2,20 @@ import winston from 'winston';
 import util from 'util';
 import CloudWatchTransport from './index.js';
 
+
 const cloudWatchTransport = new CloudWatchTransport({
   logGroupName: 'winston-cloudwatch-test',
   logStreamName: new Date().toISOString().replace(/[-:]/g, '/'),
-  shouldCreateLogGroup: false,
+  shouldCreateLogGroup: true,
   shouldCreateLogStream: true,
   // maxQueuedBatches: 2,
-  aws: {
+  /* aws: {
     credentials: {
       accessKeyId: '',
       secretAccessKey: '',
     },
     region: 'us-east-1',
-  },
+  }, */
   formatLog: ({ level, message }) => `${level}: ${message}`,
 });
 
@@ -39,8 +40,12 @@ logger.add(cloudWatchTransport);
 
 logger.info('loggety log log');
 
-logger.error('failed', new Error('test error'));
+logger.error('something failed', new Error('test error'));
 
+for (let i = 0; i < 1000; i++) {
+  logger.info(`log message ${i}`);
+  await new Promise((resolve) => setTimeout(resolve, 1));
+}
 
 // for (let i = 0; i < 10; i++) {
 //  logger.info(Array.from({ length: 200000 }).fill('a').join(''));
